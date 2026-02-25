@@ -8,7 +8,7 @@ for DAQ logic.
 
 import sys
 
-from .wavegene_gui import main
+from wavegene_gui import main
 
 if __name__ == "__main__":
     sys.exit(main())
