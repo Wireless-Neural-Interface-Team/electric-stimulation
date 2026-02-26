@@ -21,8 +21,8 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          pip install hatch
-          pip install --upgrade "virtualenv>=20.25.0"
+          pip install --no-cache-dir --upgrade "virtualenv>=20.25.0"
+          pip install --no-cache-dir hatch
 
       - name: Build package
         run: hatch build
