@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "electric-stimulation"
+name = "electric_stimulation"
 version = "0.1.2"
 description = "NI-DAQmx pulse generator for electrical stimulation with PyQt5 GUI"
 readme = "README.md"
@@ -13,7 +13,7 @@ authors = [
     {name = "Wireless Neural Interface Team"},
     {name = "Pierre He", email = "pierre.he@inserm.fr"},
 ]
-keywords = ["DAQ", "NI-DAQmx", "electrical-stimulation", "pulse-generator", "PyQt5"]
+keywords = ["DAQ", "NI-DAQmx", "electrical_stimulation", "pulse-generator", "PyQt5"]
 classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
@@ -33,12 +33,12 @@ dependencies = [
 ]
 
 [project.scripts]
-wavegene = "Electric_stimulation.wavegene_gui:main"
-wavegene-build = "Electric_stimulation.build_exe:main"
+wavegene = "electric_stimulation.wavegene_gui:main"
+wavegene-build = "electric_stimulation.build_exe:main"
 
 [project.urls]
-Homepage = "https://github.com/WNIlabs/Electric-stimulation"
-Repository = "https://github.com/WNIlabs/Electric-stimulation"
+Homepage = "https://github.com/WNIlabs/electric_stimulation"
+Repository = "https://github.com/WNIlabs/electric_stimulation"
 
 [tool.hatch.build.targets.wheel]
-packages = ["Electric_stimulation"]
+packages = ["electric_stimulation"]
