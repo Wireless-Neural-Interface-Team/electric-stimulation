@@ -17,12 +17,12 @@ The library is available on PyPI.
 ## Run application
 1. Allow script execution : run in terminal `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned`
 2. Activate virtual environment: run in terminal `source si_env/bin/activate` (macOS/Linux) or `si_env\Scripts\activate` (Windows)
-3. Run in terminal `wavegene`
+3. Run in terminal `trigger-generator`
 
 ## Build a standalone executable (Windows: `.exe`, macOS/Linux: binary):
 1. Allow script execution : run in terminal `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned`
 2. Activate virtual environment: run in terminal `source si_env/bin/activate` (macOS/Linux) or `si_env\Scripts\activate` (Windows) 
 3. Using the command-line terminal, navigate to the folder where you want the .exe file to be located.
-4. Build the executable in currentfolder/dist : run in terminal `wavegene-build`
+4. Build the executable in currentfolder/dist : run in terminal `trigger-generator-build`
 
 The executable will be in `dist/` (in the current directory).

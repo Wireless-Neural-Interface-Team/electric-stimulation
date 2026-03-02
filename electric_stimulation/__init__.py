@@ -1,23 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-Electric Stimulation - NI-DAQmx pulse generator for electrical stimulation.
+Electric Stimulation - NI-DAQmx trigger generator for electrical stimulation.
 
 Provides:
-- wavegene_backend: DAQWorker, build_channel_path for NI-DAQmx output
-- wavegene_gui: WaveGeneWindow, main() for the PyQt5 GUI
+- trigger_generator_backend: DAQWorker, build_channel_path for NI-DAQmx output
+- trigger_generator_gui: TriggerGeneratorWindow, main() for the PyQt5 GUI
 """
 
-from .wavegene_backend import (
+from .trigger_generator_backend import (
     DAQ_AVAILABLE,
     DAQWorker,
     build_channel_path,
 )
-from .wavegene_gui import WaveGeneWindow, main
+from .trigger_generator_gui import TriggerGeneratorWindow, main
 
 __all__ = [
     "DAQ_AVAILABLE",
     "DAQWorker",
-    "WaveGeneWindow",
+    "TriggerGeneratorWindow",
     "build_channel_path",
     "main",
 ]
