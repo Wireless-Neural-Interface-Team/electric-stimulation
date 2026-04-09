@@ -1,5 +1,5 @@
 """
-Script to build a standalone executable for WaveGene.
+Script to build a standalone executable for Trigger Generator.
 
 Usage:
     python build_exe.py
@@ -21,7 +21,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 def main():
     output_dir = Path.cwd() / "dist"
-    exe_name = "WaveGene.exe" if sys.platform == "win32" else "WaveGene"
+    exe_name = "TriggerGenerator.exe" if sys.platform == "win32" else "TriggerGenerator"
     exe_path = output_dir / exe_name
 
     if exe_path.exists():
@@ -29,14 +29,14 @@ def main():
             exe_path.unlink()
         except PermissionError:
             print("ERROR: The executable is locked (running or in use by another program).")
-            print("Close WaveGene and try again.")
+            print("Close Trigger Generator and try again.")
             sys.exit(1)
 
-    launcher = SCRIPT_DIR / "run_wavegene_gui.py"
+    launcher = SCRIPT_DIR / "run_trigger_generator_gui.py"
     with tempfile.TemporaryDirectory() as tmp:
         cmd = [
             sys.executable, "-m", "PyInstaller",
-            "--name=WaveGene",
+            "--name=TriggerGenerator",
             "--windowed",
             "--onefile",
             "--clean",

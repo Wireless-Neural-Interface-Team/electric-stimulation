@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-GUI for WaveGene pulse generator.
+GUI for Trigger Generator.
 
 Displays parameters, state indicator, and controls.
-Uses wavegene_backend for DAQ logic.
+Uses trigger_generator_backend for DAQ logic.
 """
 
 import json
@@ -20,9 +20,9 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QMessageBox, QLineEdit, QFrame, QFileDialog
 )
 try:
-    from .wavegene_backend import build_channel_path, DAQWorker, DAQ_AVAILABLE
+    from .trigger_generator_backend import build_channel_path, DAQWorker, DAQ_AVAILABLE
 except ImportError:
-    from wavegene_backend import build_channel_path, DAQWorker, DAQ_AVAILABLE
+    from trigger_generator_backend import build_channel_path, DAQWorker, DAQ_AVAILABLE
 
 
 def _app_dir():
@@ -32,8 +32,8 @@ def _app_dir():
     return Path(__file__).parent
 
 
-class WaveGeneWindow(QMainWindow):
-    """Main application window for pulse generation control."""
+class TriggerGeneratorWindow(QMainWindow):
+    """Main application window for trigger generation control."""
 
     def __init__(self):
         super().__init__()
@@ -47,7 +47,7 @@ class WaveGeneWindow(QMainWindow):
 
     def init_ui(self):
         """Build the main window layout and widgets."""
-        self.setWindowTitle("WaveGene - NI-DAQmx Pulse Generator")
+        self.setWindowTitle("Trigger Generator - NI-DAQmx")
         self.setMinimumWidth(400)
 
         central = QWidget()
@@ -86,42 +86,42 @@ class WaveGeneWindow(QMainWindow):
         self.sampling_rate_spin.setDecimals(0)
         params_layout.addRow("Sampling rate:", self.sampling_rate_spin)
 
-        # Pulse duration at 2V (seconds)
-        self.pulse_duration_spin = QDoubleSpinBox()
-        self.pulse_duration_spin.setRange(0.001, 60)
-        self.pulse_duration_spin.setValue(0.2)
-        self.pulse_duration_spin.setSuffix(" s")
-        self.pulse_duration_spin.setDecimals(3)
-        params_layout.addRow("Pulse duration (2V):", self.pulse_duration_spin)
+        # Trigger duration at 2V (seconds)
+        self.trigger_duration_spin = QDoubleSpinBox()
+        self.trigger_duration_spin.setRange(0.001, 60)
+        self.trigger_duration_spin.setValue(0.2)
+        self.trigger_duration_spin.setSuffix(" s")
+        self.trigger_duration_spin.setDecimals(3)
+        params_layout.addRow("Trigger duration (2V):", self.trigger_duration_spin)
 
-        # Time at 0V between pulses (seconds)
-        self.inter_pulse_spin = QDoubleSpinBox()
-        self.inter_pulse_spin.setRange(0, 3600)
-        self.inter_pulse_spin.setValue(20)
-        self.inter_pulse_spin.setSuffix(" s")
-        self.inter_pulse_spin.setDecimals(1)
-        params_layout.addRow("Inter-pulse interval:", self.inter_pulse_spin)
+        # Time at 0V between triggers (seconds)
+        self.inter_trigger_spin = QDoubleSpinBox()
+        self.inter_trigger_spin.setRange(0, 3600)
+        self.inter_trigger_spin.setValue(20)
+        self.inter_trigger_spin.setSuffix(" s")
+        self.inter_trigger_spin.setDecimals(1)
+        params_layout.addRow("Inter-trigger interval:", self.inter_trigger_spin)
 
-        # Initial 0V period before first pulse (seconds)
-        self.buffer_spin = QDoubleSpinBox()
-        self.buffer_spin.setRange(0, 300)
-        self.buffer_spin.setValue(5)
-        self.buffer_spin.setSuffix(" s")
-        self.buffer_spin.setDecimals(1)
-        self.buffer_spin.setToolTip("Time at 0V before the first pulse")
-        params_layout.addRow("Duration before first impulse:", self.buffer_spin)
+        # Initial 0V period before first trigger (seconds)
+        self.initial_trigger_delay_spin = QDoubleSpinBox()
+        self.initial_trigger_delay_spin.setRange(0, 300)
+        self.initial_trigger_delay_spin.setValue(5)
+        self.initial_trigger_delay_spin.setSuffix(" s")
+        self.initial_trigger_delay_spin.setDecimals(1)
+        self.initial_trigger_delay_spin.setToolTip("Time at 0V before the first trigger")
+        params_layout.addRow("Initial trigger delay:", self.initial_trigger_delay_spin)
 
-        # Infinite: repeat forever; else use nb_pulses
+        # Infinite: repeat forever; else use nb_triggers
         self.infinite_check = QCheckBox("Repeat indefinitely")
         self.infinite_check.setChecked(True)
         self.infinite_check.toggled.connect(self.on_infinite_toggled)
         params_layout.addRow("", self.infinite_check)
 
-        self.nb_pulses_spin = QSpinBox()
-        self.nb_pulses_spin.setRange(1, 10000)
-        self.nb_pulses_spin.setValue(5)
-        self.nb_pulses_spin.setEnabled(False)
-        params_layout.addRow("Number of pulses:", self.nb_pulses_spin)
+        self.nb_triggers_spin = QSpinBox()
+        self.nb_triggers_spin.setRange(1, 10000)
+        self.nb_triggers_spin.setValue(5)
+        self.nb_triggers_spin.setEnabled(False)
+        params_layout.addRow("Number of triggers:", self.nb_triggers_spin)
 
         layout.addWidget(params_group)
 
@@ -144,7 +144,7 @@ class WaveGeneWindow(QMainWindow):
         btn_layout.addWidget(self.stop_btn)
         layout.addLayout(btn_layout)
 
-        # --- State indicator: shows current phase (Duration before first impulse, Pulse, 0V) + countdown ---
+        # --- State indicator: shows current phase (Initial trigger delay, Trigger, 0V) + countdown ---
         self.state_frame = QFrame()
         self.state_frame.setFrameStyle(QFrame.StyledPanel)
         self.state_frame.setMinimumHeight(60)
@@ -187,19 +187,19 @@ class WaveGeneWindow(QMainWindow):
             self.start_btn.setToolTip("PyDAQmx is not installed")
 
     def on_infinite_toggled(self, checked):
-        """Enable nb_pulses only when not in infinite mode."""
-        self.nb_pulses_spin.setEnabled(not checked)
+        """Enable nb_triggers only when not in infinite mode."""
+        self.nb_triggers_spin.setEnabled(not checked)
 
     def set_params_enabled(self, enabled):
         """Enable or disable all parameter fields."""
         self.device_edit.setEnabled(enabled)
         self.channel_edit.setEnabled(enabled)
         self.sampling_rate_spin.setEnabled(enabled)
-        self.pulse_duration_spin.setEnabled(enabled)
-        self.inter_pulse_spin.setEnabled(enabled)
-        self.buffer_spin.setEnabled(enabled)
+        self.trigger_duration_spin.setEnabled(enabled)
+        self.inter_trigger_spin.setEnabled(enabled)
+        self.initial_trigger_delay_spin.setEnabled(enabled)
         self.infinite_check.setEnabled(enabled)
-        self.nb_pulses_spin.setEnabled(enabled and not self.infinite_check.isChecked())
+        self.nb_triggers_spin.setEnabled(enabled and not self.infinite_check.isChecked())
         self.load_btn.setEnabled(enabled)
 
     def start_generation(self):
@@ -210,19 +210,19 @@ class WaveGeneWindow(QMainWindow):
         # Gather parameters from UI
         device = build_channel_path(self.device_edit.text(), self.channel_edit.text())
         sampling_rate = self.sampling_rate_spin.value()
-        pulse_duration = self.pulse_duration_spin.value()
-        inter_pulse = self.inter_pulse_spin.value()
-        buffer_duration = self.buffer_spin.value()
+        trigger_duration = self.trigger_duration_spin.value()
+        inter_trigger = self.inter_trigger_spin.value()
+        initial_trigger_delay = self.initial_trigger_delay_spin.value()
         infinite = self.infinite_check.isChecked()
-        nb_pulses = self.nb_pulses_spin.value()
+        nb_triggers = self.nb_triggers_spin.value()
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.set_params_enabled(False)
 
         # Create worker and thread
-        self.worker = DAQWorker(device, sampling_rate, pulse_duration, inter_pulse,
-                                infinite, nb_pulses, buffer_duration)
+        self.worker = DAQWorker(device, sampling_rate, trigger_duration, inter_trigger,
+                                infinite, nb_triggers, initial_trigger_delay)
         self.worker_thread = QThread()
         self.worker.moveToThread(self.worker_thread)
 
@@ -236,11 +236,11 @@ class WaveGeneWindow(QMainWindow):
             "device": self.device_edit.text().strip(),
             "channel": self.channel_edit.text().strip(),
             "sampling_rate": sampling_rate,
-            "buffer": buffer_duration,
-            "pulse": pulse_duration,
-            "interval": inter_pulse,
+            "initial_trigger_delay": initial_trigger_delay,
+            "trigger": trigger_duration,
+            "interval": inter_trigger,
             "infinite": infinite,
-            "nb_pulses": nb_pulses,
+            "nb_triggers": nb_triggers,
         }
         self.experiment_start_time = datetime.now()
         self.worker_thread.start()
@@ -276,23 +276,23 @@ class WaveGeneWindow(QMainWindow):
         elapsed = time.time() - self.state_start_time
         self.time_total_label.setText(self.format_elapsed(elapsed))
         p = self.worker_params
-        buf, pulse, interval = p["buffer"], p["pulse"], p["interval"]
-        cycle_duration = pulse + interval
+        initial_delay, trigger, interval = p["initial_trigger_delay"], p["trigger"], p["interval"]
+        cycle_duration = trigger + interval
 
-        # Phase 1: Duration before first impulse (0V)
-        if elapsed < buf:
+        # Phase 1: Initial trigger delay (0V)
+        if elapsed < initial_delay:
             text, color, bg = "(0V)", "#666", "#e0e0e0"
-            remaining = buf - elapsed
+            remaining = initial_delay - elapsed
             countdown = self.format_countdown(remaining)
         else:
-            # Phase 2: Pulse or interval
-            cycle_time = elapsed - buf
+            # Phase 2: Trigger or interval
+            cycle_time = elapsed - initial_delay
             if p["infinite"]:
                 pos_in_cycle = cycle_time % cycle_duration
             else:
-                total_cycles = p["nb_pulses"] * cycle_duration
+                total_cycles = p["nb_triggers"] * cycle_duration
                 if cycle_time >= total_cycles:
-                    # All pulses done
+                    # All triggers done
                     text, color, bg = "Done", "#666", "#e0e0e0"
                     self.state_label.setText(text)
                     self.state_label.setStyleSheet(f"color: {color};")
@@ -301,10 +301,10 @@ class WaveGeneWindow(QMainWindow):
                     return
                 pos_in_cycle = cycle_time % cycle_duration
 
-            if pos_in_cycle < pulse:
-                # In pulse phase
-                text, color, bg = "Pulse (2V)", "#1b5e20", "#c8e6c9"
-                remaining = pulse - pos_in_cycle
+            if pos_in_cycle < trigger:
+                # In trigger phase
+                text, color, bg = "Trigger (2V)", "#1b5e20", "#c8e6c9"
+                remaining = trigger - pos_in_cycle
             else:
                 # In interval phase
                 text, color, bg = "0V (interval)", "#37474f", "#eceff1"
@@ -326,18 +326,18 @@ class WaveGeneWindow(QMainWindow):
             "device": p.get("device", "Dev2"),
             "channel": p.get("channel", "ao0"),
             "sampling_rate": p.get("sampling_rate", 1000),
-            "pulse_duration": p.get("pulse", 0.2),
-            "inter_pulse_interval": p.get("interval", 20),
-            "buffer_duration": p.get("buffer", 5),
+            "trigger_duration": p.get("trigger", 0.2),
+            "inter_trigger_interval": p.get("interval", 20),
+            "initial_trigger_delay": p.get("initial_trigger_delay", 5),
             "infinite": p.get("infinite", True),
-            "nb_pulses": p.get("nb_pulses", 5),
+            "nb_triggers": p.get("nb_triggers", 5),
             "duree_secondes": round(duration_seconds, 2),
             "heure_debut": exp_time.strftime("%Y-%m-%d %H:%M:%S"),
             "heure_fin": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         save_dir = _app_dir() / "experiences"
         save_dir.mkdir(exist_ok=True)
-        filename = exp_time.strftime("wavegene_%Y-%m-%d_%H-%M-%S.json")
+        filename = exp_time.strftime("trigger_generator_%Y-%m-%d_%H-%M-%S.json")
         filepath = save_dir / filename
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -351,7 +351,7 @@ class WaveGeneWindow(QMainWindow):
             if not silent:
                 QMessageBox.warning(self, "Load", "No experiments folder found.")
             return
-        json_files = list(save_dir.glob("wavegene_*.json"))
+        json_files = list(save_dir.glob("trigger_generator_*.json")) + list(save_dir.glob("wavegene_*.json"))
         if not json_files:
             if not silent:
                 QMessageBox.warning(self, "Load", "No experiment file found.")
@@ -375,11 +375,11 @@ class WaveGeneWindow(QMainWindow):
             self.device_edit.setText(data.get("device", "Dev2"))
             self.channel_edit.setText(data.get("channel", "ao0"))
             self.sampling_rate_spin.setValue(data.get("sampling_rate", 1000))
-            self.pulse_duration_spin.setValue(data.get("pulse_duration", 0.2))
-            self.inter_pulse_spin.setValue(data.get("inter_pulse_interval", 20))
-            self.buffer_spin.setValue(data.get("buffer_duration", 5))
+            self.trigger_duration_spin.setValue(data.get("trigger_duration", data.get("pulse_duration", 0.2)))
+            self.inter_trigger_spin.setValue(data.get("inter_trigger_interval", data.get("inter_pulse_interval", 20)))
+            self.initial_trigger_delay_spin.setValue(data.get("initial_trigger_delay", 5))
             self.infinite_check.setChecked(data.get("infinite", True))
-            self.nb_pulses_spin.setValue(data.get("nb_pulses", 5))
+            self.nb_triggers_spin.setValue(data.get("nb_triggers", data.get("nb_pulses", 5)))
             if not silent:
                 QMessageBox.information(self, "Load", f"Parameters loaded from {path.name}")
         except Exception as e:
@@ -419,7 +419,7 @@ def main():
     """Application entry point."""
     app = QApplication([])
     app.setStyle("Fusion")
-    window = WaveGeneWindow()
+    window = TriggerGeneratorWindow()
     window.show()
     return app.exec_()
 
