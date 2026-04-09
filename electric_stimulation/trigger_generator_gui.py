@@ -7,6 +7,7 @@ Uses trigger_generator_backend for DAQ logic.
 """
 
 import json
+import math
 import sys
 import time
 from datetime import datetime
@@ -17,12 +18,17 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGroupBox, QFormLayout, QSpinBox, QDoubleSpinBox, QCheckBox,
-    QPushButton, QLabel, QMessageBox, QLineEdit, QFrame, QFileDialog
+    QPushButton, QLabel, QMessageBox, QLineEdit, QFrame, QFileDialog,
+    QComboBox,
 )
 try:
-    from .trigger_generator_backend import build_channel_path, DAQWorker, DAQ_AVAILABLE
+    from .trigger_generator_backend import (
+        build_channel_path, DAQWorker, DAQ_AVAILABLE, led_pattern_dimensions,
+    )
 except ImportError:
-    from trigger_generator_backend import build_channel_path, DAQWorker, DAQ_AVAILABLE
+    from trigger_generator_backend import (
+        build_channel_path, DAQWorker, DAQ_AVAILABLE, led_pattern_dimensions,
+    )
 
 
 def _app_dir():
@@ -67,6 +73,12 @@ class TriggerGeneratorWindow(QMainWindow):
         params_group = QGroupBox("Parameters")
         params_layout = QFormLayout(params_group)
 
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Classic (0 V / 3 V pulses)", "classic")
+        self.mode_combo.addItem("LED", "led")
+        self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
+        params_layout.addRow("Mode:", self.mode_combo)
+
         # Device and channel (e.g. Dev2, ao0)
         self.device_edit = QLineEdit()
         self.device_edit.setPlaceholderText("Dev1, Dev2, ...")
@@ -84,32 +96,37 @@ class TriggerGeneratorWindow(QMainWindow):
         self.sampling_rate_spin.setValue(1000)
         self.sampling_rate_spin.setSuffix(" Hz")
         self.sampling_rate_spin.setDecimals(0)
+        self.sampling_rate_spin.setToolTip(
+            "Output sample rate (LED pulse lengths are quantized to this clock)."
+        )
         params_layout.addRow("Sampling rate:", self.sampling_rate_spin)
 
-        # Trigger duration at 2V (seconds)
+        self.classic_pulse_group = QGroupBox("Pulses (classic mode)")
+        classic_form = QFormLayout(self.classic_pulse_group)
         self.trigger_duration_spin = QDoubleSpinBox()
         self.trigger_duration_spin.setRange(0.001, 60)
         self.trigger_duration_spin.setValue(0.2)
         self.trigger_duration_spin.setSuffix(" s")
         self.trigger_duration_spin.setDecimals(3)
-        params_layout.addRow("Trigger duration (2V):", self.trigger_duration_spin)
-
-        # Time at 0V between triggers (seconds)
+        classic_form.addRow("Trigger duration (3 V):", self.trigger_duration_spin)
         self.inter_trigger_spin = QDoubleSpinBox()
         self.inter_trigger_spin.setRange(0, 3600)
         self.inter_trigger_spin.setValue(20)
         self.inter_trigger_spin.setSuffix(" s")
         self.inter_trigger_spin.setDecimals(1)
-        params_layout.addRow("Inter-trigger interval:", self.inter_trigger_spin)
+        classic_form.addRow("Inter-trigger interval:", self.inter_trigger_spin)
+        params_layout.addRow(self.classic_pulse_group)
 
-        # Initial 0V period before first trigger (seconds)
+        # Initial delay before pattern starts (seconds)
         self.initial_trigger_delay_spin = QDoubleSpinBox()
         self.initial_trigger_delay_spin.setRange(0, 300)
         self.initial_trigger_delay_spin.setValue(5)
         self.initial_trigger_delay_spin.setSuffix(" s")
         self.initial_trigger_delay_spin.setDecimals(1)
-        self.initial_trigger_delay_spin.setToolTip("Time at 0V before the first trigger")
-        params_layout.addRow("Initial trigger delay:", self.initial_trigger_delay_spin)
+        self.initial_trigger_delay_spin.setToolTip(
+            "Classic: 0 V before first pulse. LED: rest voltage before the train."
+        )
+        params_layout.addRow("Initial delay:", self.initial_trigger_delay_spin)
 
         # Infinite: repeat forever; else use nb_triggers
         self.infinite_check = QCheckBox("Repeat indefinitely")
@@ -123,7 +140,77 @@ class TriggerGeneratorWindow(QMainWindow):
         self.nb_triggers_spin.setEnabled(False)
         params_layout.addRow("Number of triggers:", self.nb_triggers_spin)
 
+        # --- LED mode (led_clignotement_v0.1 logic) ---
+        self.led_group = QGroupBox("LED — train")
+        led_layout = QFormLayout(self.led_group)
+        self.led_train_duration_spin = QDoubleSpinBox()
+        self.led_train_duration_spin.setRange(1e-6, 86400.0)
+        self.led_train_duration_spin.setValue(1.0)
+        self.led_train_duration_spin.setSuffix(" s")
+        self.led_train_duration_spin.setDecimals(6)
+        self.led_train_duration_spin.setToolTip(
+            "Duration of one stimulation train in seconds "
+            "(length in samples = ceil(sampling rate × duration))."
+        )
+        led_layout.addRow("Train duration:", self.led_train_duration_spin)
+
+        self.led_nb_cycles_spin = QSpinBox()
+        self.led_nb_cycles_spin.setRange(1, 100000)
+        self.led_nb_cycles_spin.setValue(1)
+        self.led_nb_cycles_spin.setToolTip(
+            "Number of blinks inside the train duration (equal-length slots). "
+            "E.g. 5 → five flashes within one train."
+        )
+        led_layout.addRow("Cycles per train:", self.led_nb_cycles_spin)
+
+        self.led_duty_train_spin = QDoubleSpinBox()
+        self.led_duty_train_spin.setRange(0.0, 1.0)
+        self.led_duty_train_spin.setValue(1.0)
+        self.led_duty_train_spin.setSingleStep(0.05)
+        self.led_duty_train_spin.setDecimals(3)
+        self.led_duty_train_spin.setToolTip(
+            "Target fraction of each slot at pulse voltage; the same pulse width (in samples) "
+            "is used for every blink (from average slot length, capped so all slots fit)."
+        )
+        led_layout.addRow("Train duty cycle:", self.led_duty_train_spin)
+
+        self.led_light_intensity_spin = QDoubleSpinBox()
+        self.led_light_intensity_spin.setRange(0.0, 1.0)
+        self.led_light_intensity_spin.setValue(1.0)
+        self.led_light_intensity_spin.setSingleStep(0.05)
+        self.led_light_intensity_spin.setDecimals(3)
+        self.led_light_intensity_spin.setToolTip(
+            "Light intensity (0–1): among active samples, round(L×value) are at pulse voltage, "
+            "evenly spaced (1 = full on; 0.2 ≈ 20% of samples; 0 = off)."
+        )
+        led_layout.addRow("Light intensity:", self.led_light_intensity_spin)
+
+        self.led_inter_train_spin = QDoubleSpinBox()
+        self.led_inter_train_spin.setRange(0.0, 3600.0)
+        self.led_inter_train_spin.setValue(2.0)
+        self.led_inter_train_spin.setSuffix(" s")
+        self.led_inter_train_spin.setDecimals(3)
+        led_layout.addRow("Inter-train pause:", self.led_inter_train_spin)
+
+        self.led_v_high_spin = QDoubleSpinBox()
+        self.led_v_high_spin.setRange(-10.0, 10.0)
+        self.led_v_high_spin.setValue(3.0)
+        self.led_v_high_spin.setSuffix(" V")
+        self.led_v_high_spin.setDecimals(2)
+        self.led_v_high_spin.setToolTip("Rest level (outside LED pulses in the original script)")
+        led_layout.addRow("Rest voltage (high):", self.led_v_high_spin)
+
+        self.led_v_low_spin = QDoubleSpinBox()
+        self.led_v_low_spin.setRange(-10.0, 10.0)
+        self.led_v_low_spin.setValue(0.0)
+        self.led_v_low_spin.setSuffix(" V")
+        self.led_v_low_spin.setDecimals(2)
+        self.led_v_low_spin.setToolTip("Level during pulse (PWM coincidence)")
+        led_layout.addRow("Pulse voltage (low):", self.led_v_low_spin)
+
+        self.params_group = params_group
         layout.addWidget(params_group)
+        layout.addWidget(self.led_group)
 
         # --- Action buttons ---
         btn_layout = QHBoxLayout()
@@ -186,20 +273,50 @@ class TriggerGeneratorWindow(QMainWindow):
             self.start_btn.setEnabled(False)
             self.start_btn.setToolTip("PyDAQmx is not installed")
 
+        self.on_mode_changed()
+
+    def on_mode_changed(self, _index=None):
+        """Show LED or classic fields depending on mode."""
+        led = self.mode_combo.currentData() == "led"
+        self.led_group.setVisible(led)
+        self.classic_pulse_group.setVisible(not led)
+        self.nb_triggers_spin.setToolTip(
+            "Classic: number of pulses. LED: number of full pattern repeats (train + pause)."
+            if led
+            else ""
+        )
+        # QMainWindow does not shrink by itself after setVisible(False); refresh after layout.
+        QTimer.singleShot(0, self._shrink_window_to_content_height)
+
+    def _shrink_window_to_content_height(self):
+        """Fit window height to content (e.g. when switching back to Classic)."""
+        cw = self.centralWidget()
+        if cw is None:
+            return
+        lay = cw.layout()
+        if lay is not None:
+            lay.activate()
+        cw.updateGeometry()
+        self.updateGeometry()
+        h = self.sizeHint().height()
+        if h > 0:
+            self.resize(self.width(), h)
+
     def on_infinite_toggled(self, checked):
         """Enable nb_triggers only when not in infinite mode."""
         self.nb_triggers_spin.setEnabled(not checked)
 
     def set_params_enabled(self, enabled):
         """Enable or disable all parameter fields."""
+        self.mode_combo.setEnabled(enabled)
         self.device_edit.setEnabled(enabled)
         self.channel_edit.setEnabled(enabled)
         self.sampling_rate_spin.setEnabled(enabled)
-        self.trigger_duration_spin.setEnabled(enabled)
-        self.inter_trigger_spin.setEnabled(enabled)
+        self.classic_pulse_group.setEnabled(enabled)
         self.initial_trigger_delay_spin.setEnabled(enabled)
         self.infinite_check.setEnabled(enabled)
         self.nb_triggers_spin.setEnabled(enabled and not self.infinite_check.isChecked())
+        self.led_group.setEnabled(enabled)
         self.load_btn.setEnabled(enabled)
 
     def start_generation(self):
@@ -215,14 +332,43 @@ class TriggerGeneratorWindow(QMainWindow):
         initial_trigger_delay = self.initial_trigger_delay_spin.value()
         infinite = self.infinite_check.isChecked()
         nb_triggers = self.nb_triggers_spin.value()
+        mode = self.mode_combo.currentData() or "classic"
+
+        if mode == "led":
+            train_dur_s = self.led_train_duration_spin.value()
+            if train_dur_s <= 0:
+                QMessageBox.warning(
+                    self, "LED settings",
+                    "Train duration must be positive.",
+                )
+                return
+            period_un = int(math.ceil(sampling_rate * train_dur_s))
+            n_blinks = int(self.led_nb_cycles_spin.value())
+            if period_un < n_blinks:
+                QMessageBox.warning(
+                    self, "LED settings",
+                    "This train duration yields too few samples for this many blinks. "
+                    "Increase sampling rate or train duration, or reduce cycles per train.",
+                )
+                return
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.set_params_enabled(False)
 
         # Create worker and thread
-        self.worker = DAQWorker(device, sampling_rate, trigger_duration, inter_trigger,
-                                infinite, nb_triggers, initial_trigger_delay)
+        self.worker = DAQWorker(
+            device, sampling_rate, trigger_duration, inter_trigger,
+            infinite, nb_triggers, initial_trigger_delay,
+            mode=mode,
+            led_train_duration_s=self.led_train_duration_spin.value(),
+            led_nb_clignotement=int(self.led_nb_cycles_spin.value()),
+            led_duty_clignotement=self.led_duty_train_spin.value(),
+            led_light_intensity=self.led_light_intensity_spin.value(),
+            led_inter_train_interval=self.led_inter_train_spin.value(),
+            led_voltage_high=self.led_v_high_spin.value(),
+            led_voltage_low=self.led_v_low_spin.value(),
+        )
         self.worker_thread = QThread()
         self.worker.moveToThread(self.worker_thread)
 
@@ -231,7 +377,11 @@ class TriggerGeneratorWindow(QMainWindow):
         self.worker.finished.connect(self.on_generation_finished)
         self.worker.error.connect(self.on_generation_error)
 
-        # Store params for state indicator and JSON save
+        led_train_samples, led_timer_samples = led_pattern_dimensions(
+            sampling_rate,
+            self.led_train_duration_spin.value(),
+            self.led_inter_train_spin.value(),
+        )
         self.worker_params = {
             "device": self.device_edit.text().strip(),
             "channel": self.channel_edit.text().strip(),
@@ -241,6 +391,16 @@ class TriggerGeneratorWindow(QMainWindow):
             "interval": inter_trigger,
             "infinite": infinite,
             "nb_triggers": nb_triggers,
+            "mode": mode,
+            "led_train_samples": led_train_samples,
+            "led_timer_samples": led_timer_samples,
+            "led_train_duration_s": self.led_train_duration_spin.value(),
+            "led_nb_clignotement": int(self.led_nb_cycles_spin.value()),
+            "led_duty_clignotement": self.led_duty_train_spin.value(),
+            "led_light_intensity": self.led_light_intensity_spin.value(),
+            "led_inter_train_interval": self.led_inter_train_spin.value(),
+            "led_voltage_high": self.led_v_high_spin.value(),
+            "led_voltage_low": self.led_v_low_spin.value(),
         }
         self.experiment_start_time = datetime.now()
         self.worker_thread.start()
@@ -276,12 +436,51 @@ class TriggerGeneratorWindow(QMainWindow):
         elapsed = time.time() - self.state_start_time
         self.time_total_label.setText(self.format_elapsed(elapsed))
         p = self.worker_params
-        initial_delay, trigger, interval = p["initial_trigger_delay"], p["trigger"], p["interval"]
+        initial_delay = p["initial_trigger_delay"]
+        sr = p["sampling_rate"]
+
+        if p.get("mode") == "led":
+            vh = p.get("led_voltage_high", 3.0)
+            train_s = p.get("led_train_samples", 1)
+            timer_s = max(1, p.get("led_timer_samples", 1))
+            train_dur = train_s / sr
+            cycle_dur = timer_s / sr
+            if elapsed < initial_delay:
+                text = f"LED — wait ({vh:.1f} V rest)"
+                color, bg = "#666", "#e0e0e0"
+                remaining = initial_delay - elapsed
+                countdown = self.format_countdown(remaining)
+            else:
+                t_loop = elapsed - initial_delay
+                if not p["infinite"]:
+                    total_dur = p["nb_triggers"] * cycle_dur
+                    if t_loop >= total_dur:
+                        text, color, bg = "Done", "#666", "#e0e0e0"
+                        self.state_label.setText(text)
+                        self.state_label.setStyleSheet(f"color: {color};")
+                        self.state_frame.setStyleSheet(f"QFrame {{ background-color: {bg}; border-radius: 8px; }}")
+                        self.time_label.setText("—")
+                        return
+                pos = t_loop % cycle_dur
+                if pos < train_dur:
+                    text, color, bg = "LED — train (PWM)", "#6a1b9a", "#e1bee7"
+                    remaining = train_dur - pos
+                else:
+                    text, color, bg = "LED — pause entre trains", "#37474f", "#eceff1"
+                    remaining = cycle_dur - pos
+                countdown = self.format_countdown(remaining)
+            self.state_label.setText(text)
+            self.state_label.setStyleSheet(f"color: {color};")
+            self.state_frame.setStyleSheet(f"QFrame {{ background-color: {bg}; border-radius: 8px; }}")
+            self.time_label.setText(countdown)
+            return
+
+        trigger, interval = p["trigger"], p["interval"]
         cycle_duration = trigger + interval
 
-        # Phase 1: Initial trigger delay (0V)
+        # Phase 1: Initial delay (0 V in classic mode)
         if elapsed < initial_delay:
-            text, color, bg = "(0V)", "#666", "#e0e0e0"
+            text, color, bg = "(0 V)", "#666", "#e0e0e0"
             remaining = initial_delay - elapsed
             countdown = self.format_countdown(remaining)
         else:
@@ -302,12 +501,10 @@ class TriggerGeneratorWindow(QMainWindow):
                 pos_in_cycle = cycle_time % cycle_duration
 
             if pos_in_cycle < trigger:
-                # In trigger phase
-                text, color, bg = "Trigger (2V)", "#1b5e20", "#c8e6c9"
+                text, color, bg = "Trigger (3 V)", "#1b5e20", "#c8e6c9"
                 remaining = trigger - pos_in_cycle
             else:
-                # In interval phase
-                text, color, bg = "0V (interval)", "#37474f", "#eceff1"
+                text, color, bg = "0 V (interval)", "#37474f", "#eceff1"
                 remaining = cycle_duration - pos_in_cycle
             countdown = self.format_countdown(remaining)
 
@@ -331,9 +528,17 @@ class TriggerGeneratorWindow(QMainWindow):
             "initial_trigger_delay": p.get("initial_trigger_delay", 5),
             "infinite": p.get("infinite", True),
             "nb_triggers": p.get("nb_triggers", 5),
-            "duree_secondes": round(duration_seconds, 2),
-            "heure_debut": exp_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "heure_fin": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "mode": p.get("mode", "classic"),
+            "led_train_duration_s": p.get("led_train_duration_s", 1.0),
+            "led_nb_clignotement": p.get("led_nb_clignotement", 1),
+            "led_duty_clignotement": p.get("led_duty_clignotement", 1.0),
+            "led_light_intensity": p.get("led_light_intensity", 1.0),
+            "led_inter_train_interval": p.get("led_inter_train_interval", 2.0),
+            "led_voltage_high": p.get("led_voltage_high", 3.0),
+            "led_voltage_low": p.get("led_voltage_low", 0.0),
+            "duration_seconds": round(duration_seconds, 2),
+            "start_time": exp_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         save_dir = _app_dir() / "experiences"
         save_dir.mkdir(exist_ok=True)
@@ -380,6 +585,18 @@ class TriggerGeneratorWindow(QMainWindow):
             self.initial_trigger_delay_spin.setValue(data.get("initial_trigger_delay", 5))
             self.infinite_check.setChecked(data.get("infinite", True))
             self.nb_triggers_spin.setValue(data.get("nb_triggers", data.get("nb_pulses", 5)))
+            mode = data.get("mode", "classic")
+            idx = self.mode_combo.findData(mode)
+            if idx >= 0:
+                self.mode_combo.setCurrentIndex(idx)
+            self.led_train_duration_spin.setValue(data.get("led_train_duration_s", 1.0))
+            self.led_nb_cycles_spin.setValue(int(data.get("led_nb_clignotement", 1)))
+            self.led_duty_train_spin.setValue(data.get("led_duty_clignotement", 1.0))
+            self.led_light_intensity_spin.setValue(data.get("led_light_intensity", 1.0))
+            self.led_inter_train_spin.setValue(data.get("led_inter_train_interval", 2.0))
+            self.led_v_high_spin.setValue(data.get("led_voltage_high", 3.0))
+            self.led_v_low_spin.setValue(data.get("led_voltage_low", 0.0))
+            self.on_mode_changed()
             if not silent:
                 QMessageBox.information(self, "Load", f"Parameters loaded from {path.name}")
         except Exception as e:
