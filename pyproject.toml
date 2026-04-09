@@ -35,6 +35,14 @@ dependencies = [
     "PyQt5>=5.15",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+build = [
+    "pyinstaller>=6.0",
+]
+
 [project.scripts]
 trigger-generator = "electric_stimulation.trigger_generator_gui:main"
 trigger-generator-build = "electric_stimulation.build_exe:main"
