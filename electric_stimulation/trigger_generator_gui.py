@@ -22,20 +22,39 @@ from PyQt5.QtWidgets import (
     QComboBox,
 )
 try:
+    from .experiment_io import (
+        build_experiment_record,
+        experiences_dir,
+        save_experiment_record,
+    )
     from .trigger_generator_backend import (
         build_channel_path, DAQWorker, DAQ_AVAILABLE, led_pattern_dimensions,
     )
 except ImportError:
+    from experiment_io import (
+        build_experiment_record,
+        experiences_dir,
+        save_experiment_record,
+    )
     from trigger_generator_backend import (
         build_channel_path, DAQWorker, DAQ_AVAILABLE, led_pattern_dimensions,
     )
 
 
-def _app_dir():
-    """Return app directory (next to exe when frozen, else script dir)."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).parent
+def _state_frame_stylesheet(bg_hex):
+    return f"QFrame {{ background-color: {bg_hex}; border-radius: 8px; }}"
+
+
+def _format_elapsed(seconds):
+    m = int(seconds // 60)
+    s = seconds % 60
+    return f"{m}:{s:05.2f}"
+
+
+def _format_countdown(seconds):
+    if seconds <= 0:
+        return "0.00 s"
+    return f"{seconds:.2f} s remaining"
 
 
 class TriggerGeneratorWindow(QMainWindow):
@@ -180,7 +199,7 @@ class TriggerGeneratorWindow(QMainWindow):
         self.led_light_intensity_spin.setSingleStep(0.05)
         self.led_light_intensity_spin.setDecimals(3)
         self.led_light_intensity_spin.setToolTip(
-            "Light intensity (0–1): among active samples, round(L×value) are at pulse voltage, "
+            "Light intensity (0–1): among active samples, round(Lxvalue) are at pulse voltage, "
             "evenly spaced (1 = full on; 0.2 ≈ 20% of samples; 0 = off)."
         )
         led_layout.addRow("Light intensity:", self.led_light_intensity_spin)
@@ -306,6 +325,44 @@ class TriggerGeneratorWindow(QMainWindow):
         """Enable nb_triggers only when not in infinite mode."""
         self.nb_triggers_spin.setEnabled(not checked)
 
+    def _worker_params_snapshot(
+        self,
+        device_str,
+        channel_str,
+        sampling_rate,
+        trigger_duration,
+        inter_trigger,
+        initial_trigger_delay,
+        infinite,
+        nb_triggers,
+        mode,
+    ):
+        led_train_samples, led_timer_samples = led_pattern_dimensions(
+            sampling_rate,
+            self.led_train_duration_spin.value(),
+            self.led_inter_train_spin.value(),
+        )
+        return {
+            "device": device_str,
+            "channel": channel_str,
+            "sampling_rate": sampling_rate,
+            "initial_trigger_delay": initial_trigger_delay,
+            "trigger": trigger_duration,
+            "interval": inter_trigger,
+            "infinite": infinite,
+            "nb_triggers": nb_triggers,
+            "mode": mode,
+            "led_train_samples": led_train_samples,
+            "led_timer_samples": led_timer_samples,
+            "led_train_duration_s": self.led_train_duration_spin.value(),
+            "led_nb_clignotement": int(self.led_nb_cycles_spin.value()),
+            "led_duty_clignotement": self.led_duty_train_spin.value(),
+            "led_light_intensity": self.led_light_intensity_spin.value(),
+            "led_inter_train_interval": self.led_inter_train_spin.value(),
+            "led_voltage_high": self.led_v_high_spin.value(),
+            "led_voltage_low": self.led_v_low_spin.value(),
+        }
+
     def set_params_enabled(self, enabled):
         """Enable or disable all parameter fields."""
         self.mode_combo.setEnabled(enabled)
@@ -377,31 +434,17 @@ class TriggerGeneratorWindow(QMainWindow):
         self.worker.finished.connect(self.on_generation_finished)
         self.worker.error.connect(self.on_generation_error)
 
-        led_train_samples, led_timer_samples = led_pattern_dimensions(
+        self.worker_params = self._worker_params_snapshot(
+            self.device_edit.text().strip(),
+            self.channel_edit.text().strip(),
             sampling_rate,
-            self.led_train_duration_spin.value(),
-            self.led_inter_train_spin.value(),
+            trigger_duration,
+            inter_trigger,
+            initial_trigger_delay,
+            infinite,
+            nb_triggers,
+            mode,
         )
-        self.worker_params = {
-            "device": self.device_edit.text().strip(),
-            "channel": self.channel_edit.text().strip(),
-            "sampling_rate": sampling_rate,
-            "initial_trigger_delay": initial_trigger_delay,
-            "trigger": trigger_duration,
-            "interval": inter_trigger,
-            "infinite": infinite,
-            "nb_triggers": nb_triggers,
-            "mode": mode,
-            "led_train_samples": led_train_samples,
-            "led_timer_samples": led_timer_samples,
-            "led_train_duration_s": self.led_train_duration_spin.value(),
-            "led_nb_clignotement": int(self.led_nb_cycles_spin.value()),
-            "led_duty_clignotement": self.led_duty_train_spin.value(),
-            "led_light_intensity": self.led_light_intensity_spin.value(),
-            "led_inter_train_interval": self.led_inter_train_spin.value(),
-            "led_voltage_high": self.led_v_high_spin.value(),
-            "led_voltage_low": self.led_v_low_spin.value(),
-        }
         self.experiment_start_time = datetime.now()
         self.worker_thread.start()
 
@@ -417,24 +460,12 @@ class TriggerGeneratorWindow(QMainWindow):
         self.state_timer.timeout.connect(self.update_state_indicator)
         self.state_timer.start(100)
 
-    def format_elapsed(self, seconds):
-        """Format elapsed time as m:ss.cc."""
-        m = int(seconds // 60)
-        s = seconds % 60
-        return f"{m}:{s:05.2f}"
-
-    def format_countdown(self, seconds):
-        """Format countdown in seconds."""
-        if seconds <= 0:
-            return "0.00 s"
-        return f"{seconds:.2f} s remaining"
-
     def update_state_indicator(self):
         """Update indicator based on current signal phase (called every 100ms)."""
         if self.state_start_time is None or self.worker_params is None:
             return
         elapsed = time.time() - self.state_start_time
-        self.time_total_label.setText(self.format_elapsed(elapsed))
+        self.time_total_label.setText(_format_elapsed(elapsed))
         p = self.worker_params
         initial_delay = p["initial_trigger_delay"]
         sr = p["sampling_rate"]
@@ -449,7 +480,7 @@ class TriggerGeneratorWindow(QMainWindow):
                 text = f"LED — wait ({vh:.1f} V rest)"
                 color, bg = "#666", "#e0e0e0"
                 remaining = initial_delay - elapsed
-                countdown = self.format_countdown(remaining)
+                countdown = _format_countdown(remaining)
             else:
                 t_loop = elapsed - initial_delay
                 if not p["infinite"]:
@@ -458,7 +489,7 @@ class TriggerGeneratorWindow(QMainWindow):
                         text, color, bg = "Done", "#666", "#e0e0e0"
                         self.state_label.setText(text)
                         self.state_label.setStyleSheet(f"color: {color};")
-                        self.state_frame.setStyleSheet(f"QFrame {{ background-color: {bg}; border-radius: 8px; }}")
+                        self.state_frame.setStyleSheet(_state_frame_stylesheet(bg))
                         self.time_label.setText("—")
                         return
                 pos = t_loop % cycle_dur
@@ -468,10 +499,10 @@ class TriggerGeneratorWindow(QMainWindow):
                 else:
                     text, color, bg = "LED — pause entre trains", "#37474f", "#eceff1"
                     remaining = cycle_dur - pos
-                countdown = self.format_countdown(remaining)
+                countdown = _format_countdown(remaining)
             self.state_label.setText(text)
             self.state_label.setStyleSheet(f"color: {color};")
-            self.state_frame.setStyleSheet(f"QFrame {{ background-color: {bg}; border-radius: 8px; }}")
+            self.state_frame.setStyleSheet(_state_frame_stylesheet(bg))
             self.time_label.setText(countdown)
             return
 
@@ -482,7 +513,7 @@ class TriggerGeneratorWindow(QMainWindow):
         if elapsed < initial_delay:
             text, color, bg = "(0 V)", "#666", "#e0e0e0"
             remaining = initial_delay - elapsed
-            countdown = self.format_countdown(remaining)
+            countdown = _format_countdown(remaining)
         else:
             # Phase 2: Trigger or interval
             cycle_time = elapsed - initial_delay
@@ -495,7 +526,7 @@ class TriggerGeneratorWindow(QMainWindow):
                     text, color, bg = "Done", "#666", "#e0e0e0"
                     self.state_label.setText(text)
                     self.state_label.setStyleSheet(f"color: {color};")
-                    self.state_frame.setStyleSheet(f"QFrame {{ background-color: {bg}; border-radius: 8px; }}")
+                    self.state_frame.setStyleSheet(_state_frame_stylesheet(bg))
                     self.time_label.setText("—")
                     return
                 pos_in_cycle = cycle_time % cycle_duration
@@ -506,52 +537,30 @@ class TriggerGeneratorWindow(QMainWindow):
             else:
                 text, color, bg = "0 V (interval)", "#37474f", "#eceff1"
                 remaining = cycle_duration - pos_in_cycle
-            countdown = self.format_countdown(remaining)
+            countdown = _format_countdown(remaining)
 
         self.state_label.setText(text)
         self.state_label.setStyleSheet(f"color: {color};")
-        self.state_frame.setStyleSheet(f"QFrame {{ background-color: {bg}; border-radius: 8px; }}")
+        self.state_frame.setStyleSheet(_state_frame_stylesheet(bg))
         self.time_label.setText(countdown)
 
     def save_params_to_json(self, duration_seconds):
         """Save parameters and experiment info to a JSON file (on generation stop)."""
         if self.worker_params is None:
             return
-        p = self.worker_params
         exp_time = getattr(self, "experiment_start_time", datetime.now())
-        data = {
-            "device": p.get("device", "Dev2"),
-            "channel": p.get("channel", "ao0"),
-            "sampling_rate": p.get("sampling_rate", 1000),
-            "trigger_duration": p.get("trigger", 0.2),
-            "inter_trigger_interval": p.get("interval", 20),
-            "initial_trigger_delay": p.get("initial_trigger_delay", 5),
-            "infinite": p.get("infinite", True),
-            "nb_triggers": p.get("nb_triggers", 5),
-            "mode": p.get("mode", "classic"),
-            "led_train_duration_s": p.get("led_train_duration_s", 1.0),
-            "led_nb_clignotement": p.get("led_nb_clignotement", 1),
-            "led_duty_clignotement": p.get("led_duty_clignotement", 1.0),
-            "led_light_intensity": p.get("led_light_intensity", 1.0),
-            "led_inter_train_interval": p.get("led_inter_train_interval", 2.0),
-            "led_voltage_high": p.get("led_voltage_high", 3.0),
-            "led_voltage_low": p.get("led_voltage_low", 0.0),
-            "duration_seconds": round(duration_seconds, 2),
-            "start_time": exp_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        save_dir = _app_dir() / "experiences"
-        save_dir.mkdir(exist_ok=True)
+        record = build_experiment_record(
+            self.worker_params, duration_seconds, exp_time, datetime.now()
+        )
+        save_dir = experiences_dir()
         filename = exp_time.strftime("trigger_generator_%Y-%m-%d_%H-%M-%S.json")
-        filepath = save_dir / filename
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        save_experiment_record(record, save_dir / filename)
 
     def load_params_from_json(self, silent=False):
         """Load parameters from a JSON file.
         If silent=True (e.g. at startup), loads the most recent file without dialog.
         If silent=False (button click), opens a file dialog to choose the file."""
-        save_dir = _app_dir() / "experiences"
+        save_dir = experiences_dir()
         if not save_dir.exists():
             if not silent:
                 QMessageBox.warning(self, "Load", "No experiments folder found.")
@@ -618,7 +627,7 @@ class TriggerGeneratorWindow(QMainWindow):
         self.time_total_label.setText("0:00")
         self.state_label.setStyleSheet("color: #666;")
         self.time_label.setStyleSheet("color: #666;")
-        self.state_frame.setStyleSheet("QFrame { background-color: #e0e0e0; border-radius: 8px; }")
+        self.state_frame.setStyleSheet(_state_frame_stylesheet("#e0e0e0"))
         if self.worker_thread:
             self.worker_thread.quit()
             self.worker_thread.wait(2000)
@@ -642,5 +651,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import sys
     sys.exit(main())
